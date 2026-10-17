@@ -1,5 +1,7 @@
 /** MANUAL ONLY. Never imported by tests, app, build, or Netlify functions.
  * Requires explicit authorization for both disposable DB and isolated cluster (roles are global).
+ * Managed-target preparation is separate in ../verification/managed-harness.ts.
+ * This loopback/superuser runner never accepts a managed target or falls back to one.
  * Applies quarantined candidates ONLY after all gates pass. No default Netlify connection fallback.
  */
 import assert from 'node:assert/strict';
