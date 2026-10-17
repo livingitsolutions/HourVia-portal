@@ -40,10 +40,10 @@ export interface OrganizationTransaction {
   claimIdempotency(context: OrganizationContext, key: string, inputDigest: string): Promise<Result<'new' | 'replay'>>;
   appendAudit(event: AuditEvent): Promise<void>;
 }
-export interface TransactionRunner {
+export interface TransactionRunner<TTransaction = OrganizationTransaction> {
   /** Serializable or equivalent tenant locking. Roll back writes, audit and key claims on error.
    * Recheck actor membership/session under lock; bounded serialization retries reuse idempotency key. */
-  run<T>(context: OrganizationContext, operation: (transaction: OrganizationTransaction) => Promise<Result<T>>): Promise<Result<T>>;
+  run<T>(context: OrganizationContext, operation: (transaction: TTransaction) => Promise<Result<T>>): Promise<Result<T>>;
 }
 export interface OrganizationQueries {
   listForUser(principal: AuthenticatedPrincipal): Promise<readonly Organization[]>;
