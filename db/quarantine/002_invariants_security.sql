@@ -63,6 +63,12 @@ END $$;
 CREATE FUNCTION public.hv_lifecycle_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.state <> 'pending' THEN
+      RAISE EXCEPTION 'invitation must start pending' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF TG_TABLE_NAME = 'memberships' THEN
     IF OLD.status = 'revoked' OR (NEW.role, NEW.status) IS DISTINCT FROM (OLD.role, OLD.status) AND NEW.monitoring_delegated THEN
       RAISE EXCEPTION 'terminal membership or uncleared delegation' USING ERRCODE = '23514';
@@ -86,8 +92,8 @@ BEGIN
     IF OLD.state <> 'pending' OR NEW.state NOT IN ('accepted','revoked','expired') OR
        (NEW.organization_id, NEW.email, NEW.role, NEW.credential_digest, NEW.inviter_membership_id, NEW.expires_at)
        IS DISTINCT FROM (OLD.organization_id, OLD.email, OLD.role, OLD.credential_digest, OLD.inviter_membership_id, OLD.expires_at) OR
-       (NEW.state = 'accepted' AND (OLD.expires_at <= transaction_timestamp() OR NEW.accepted_at <> transaction_timestamp())) OR
-       (NEW.state = 'expired' AND OLD.expires_at > transaction_timestamp()) THEN
+       (NEW.state = 'accepted' AND (OLD.expires_at <= clock_timestamp() OR NEW.accepted_at <> transaction_timestamp())) OR
+       (NEW.state = 'expired' AND OLD.expires_at > clock_timestamp()) THEN
       RAISE EXCEPTION 'invalid invitation transition' USING ERRCODE = '23514';
     END IF;
   ELSIF TG_TABLE_NAME = 'idempotency_records' THEN
@@ -104,6 +110,9 @@ DO $$ DECLARE tab text; BEGIN
     EXECUTE format('CREATE TRIGGER lifecycle_guard BEFORE UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.hv_lifecycle_guard()', tab);
   END LOOP;
 END $$;
+CREATE TRIGGER invitation_initial_state BEFORE INSERT ON public.invitations
+FOR EACH ROW EXECUTE FUNCTION public.hv_lifecycle_guard();
+
 CREATE FUNCTION public.hv_completed_claim() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
