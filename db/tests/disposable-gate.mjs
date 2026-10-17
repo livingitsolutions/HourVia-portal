@@ -6,6 +6,8 @@ export function authorizeDisposable(rawTarget, args, driver) {
   const name = target.pathname.slice(1);
   if (!['postgres:', 'postgresql:'].includes(target.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(target.hostname) ||
       target.search || target.hash || !/^hourvia_disposable_[a-z0-9_]{8,64}$/.test(name) ||
+      /(^|_)(prod|production|stage|staging)(_|$)/.test(name) ||
+      !args.includes('--require-cluster-teardown') ||
       !args.includes('--authorize-disposable=' + name) || !args.includes('--authorize-isolated-cluster') || !args.includes('--apply-quarantined-candidates')) {
     throw new Error('DISPOSABLE_AUTHORIZATION_REQUIRED');
   }

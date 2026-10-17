@@ -11,6 +11,9 @@ async function main() {
   const databaseName = authorizeDisposable(target, process.argv.slice(2), process.env.NETLIFY_DB_DRIVER);
   const { getDatabase } = await import('@netlify/database');
   const db = getDatabase({ connectionString: target });
+  assert.equal(db.driver, 'server');
+  db.pool.options.connectionTimeoutMillis = 5000;
+  db.pool.options.statement_timeout = 10000;
   const admin = await db.pool.connect();
   let checks = 0;
   const uid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -40,8 +43,16 @@ async function main() {
   try {
     const meta = (await query("SELECT current_database() AS name, current_setting('server_version_num')::integer AS version")).rows[0];
     assert.equal(meta.name, databaseName); assert.ok(meta.version >= 150000);
-    assert.equal((await query("SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S')")).rowCount, 0);
+    assert.equal((await query("SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'")).rowCount, 0);
     assert.equal((await query("SELECT 1 FROM pg_roles WHERE rolname IN ('hourvia_migration','hourvia_runtime')")).rowCount, 0);
+    // An empty public schema alone does not establish freshness. Reject user schemas,
+    // routines, extra extensions and other sessions before any candidate is applied.
+    assert.equal((await query("SELECT 1 FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname NOT IN ('public','information_schema')")).rowCount, 0);
+    assert.equal((await query("SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'")).rowCount, 0);
+    assert.equal((await query("SELECT 1 FROM pg_extension WHERE extname <> 'plpgsql'")).rowCount, 0);
+    assert.equal((await query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()")).rowCount, 0);
+    assert.equal((await query("SELECT rolsuper FROM pg_roles WHERE rolname=session_user")).rows[0].rolsuper, true);
+    assert.equal((await query("SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public'")).rowCount, 0);
     // No schema/role cleanup: destroy the entire isolated cluster after review.
     await query('BEGIN');
     await query(await readFile(new URL('../quarantine/000_roles.sql', import.meta.url), 'utf8'));
@@ -78,7 +89,7 @@ async function main() {
     await runtime(async () => { assert.equal((await query('SELECT * FROM organizations')).rowCount,0); checks++; },1,22,101);
     // Same pooled connection after local context reset.
     await runtime(async () => { assert.equal((await query('SELECT * FROM memberships')).rowCount,0); checks++; }, null);
-    for (const sql of ["INSERT INTO organizations(name) VALUES ('denied')", 'DELETE FROM memberships', 'UPDATE global_users SET version=version+1', 'TRUNCATE audit_events', 'SELECT * FROM provider_identities', 'SET ROLE hourvia_migration', 'ALTER TABLE organizations ADD COLUMN forbidden text', 'CREATE TABLE public.forbidden(id integer)', 'CREATE TEMP TABLE forbidden(id integer)', 'CREATE SCHEMA forbidden', 'CREATE ROLE forbidden', "SELECT public.hv_owner_count()"])
+    for (const sql of ["INSERT INTO organizations(name) VALUES ('denied')", 'DELETE FROM memberships', "INSERT INTO memberships(organization_id,user_id,role) VALUES ('00000000-0000-4000-8000-000000000102','00000000-0000-4000-8000-000000000001','ADMIN')", "UPDATE memberships SET version=version+1 WHERE organization_id='00000000-0000-4000-8000-000000000102'", "DELETE FROM memberships WHERE organization_id='00000000-0000-4000-8000-000000000102'", 'UPDATE global_users SET version=version+1', 'TRUNCATE audit_events', 'SELECT * FROM provider_identities', 'SET ROLE hourvia_migration', 'ALTER TABLE organizations ADD COLUMN forbidden text', 'CREATE TABLE public.forbidden(id integer)', 'CREATE TEMP TABLE forbidden(id integer)', 'CREATE SCHEMA forbidden', 'CREATE ROLE forbidden', "SELECT public.hv_owner_count()"])
       await runtime(async () => denied(sql));
     await runtime(async () => {
       await query("SELECT set_config('hourvia.organization_id','malformed',true)");
@@ -87,6 +98,13 @@ async function main() {
     assert.equal((await query("SELECT count(*)::integer AS n FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity")).rows[0].n,8); checks++;
     const role = (await query("SELECT rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname='hourvia_runtime'")).rows[0];
     assert.ok(Object.values(role).every(v => v === false)); checks++;
+
+    // Exercise FORCE RLS as the table owner with its permissive policy removed.
+    // Without FORCE the owner would still see fixtures; this transaction is rolled back.
+    await rollbackCase(async () => {
+      await query('DROP POLICY migration_only ON memberships');
+      assert.equal((await query('SELECT * FROM memberships')).rowCount, 0); checks++;
+    });
 
     await rollbackCase(async () => denied("INSERT INTO memberships(organization_id,user_id,role) VALUES ($1,$2,'OWNER')",[uid(101),uid(2)]));
     await begin();
@@ -133,7 +151,7 @@ async function main() {
       await other.query('SELECT version FROM organizations WHERE id=$1',[uid(102)]);
       const secondAccept = accept(other).then(() => 'unexpected').catch(e => e.code ?? 'rejected');
       await commit();
-      assert.notEqual(await secondAccept, 'unexpected'); await other.query('ROLLBACK'); checks++;
+      assert.ok(['40001','55P03'].includes(await secondAccept)); await other.query('ROLLBACK'); checks++;
     } finally { other.release(); }
     await rollbackCase(async () => denied("UPDATE invitations SET state='revoked',version=version+1 WHERE id=$1",[uid(301)]));
     await rollbackCase(async () => denied("UPDATE invitations SET accepted_membership_id=$1,version=version+1 WHERE id=$2",[uid(203),uid(301)]));
@@ -142,6 +160,14 @@ async function main() {
     await query("INSERT INTO invitations(id,organization_id,email,role,credential_digest,inviter_membership_id,created_at,expires_at) VALUES ($1,$2,'user1@example.invalid','EMPLOYEE',repeat('c',64),$3,now()-interval '2 hours',now()-interval '1 hour')",[uid(302),uid(102),uid(202)]);
     await commit();
     await rollbackCase(async () => denied("UPDATE invitations SET state='accepted',accepted_membership_id=$1,accepted_at=transaction_timestamp(),version=version+1 WHERE id=$2",[uid(204),uid(302)]));
+
+    // A transaction begun before expiry cannot consume a token after wall-clock expiry.
+    await begin();
+    await query("INSERT INTO invitations(id,organization_id,email,role,credential_digest,inviter_membership_id,expires_at) VALUES ($1,$2,'late@example.invalid','EMPLOYEE',repeat('9',64),$3,clock_timestamp()+interval '100 milliseconds')",[uid(303),uid(102),uid(202)]);
+    await query('SELECT pg_sleep(0.2)');
+    await denied("UPDATE invitations SET state='accepted',accepted_membership_id=$1,accepted_at=transaction_timestamp(),version=version+1 WHERE id=$2",[uid(204),uid(303)]);
+    await query('ROLLBACK');
+    await rollbackCase(async () => denied("INSERT INTO invitations(organization_id,email,role,credential_digest,inviter_membership_id,expires_at,state,accepted_membership_id,accepted_at) VALUES ($1,'terminal@example.invalid','EMPLOYEE',repeat('8',64),$2,now()+interval '1 hour','accepted',$3,now())",[uid(102),uid(202),uid(204)]));
 
     // Idempotency claims cannot commit pending; completed outcomes are immutable and unique.
     await begin();
@@ -182,6 +208,14 @@ async function main() {
     }
     checks++;
 
+    // PostgreSQL resolves COMMIT on an aborted transaction with a ROLLBACK tag.
+    await begin();
+    await denied('SELECT 1/0', [], ['22012']);
+    assert.equal((await query('COMMIT')).command, 'ROLLBACK'); checks++;
+    await begin();
+    assert.equal((await query('SELECT 1 AS recovered')).rows[0].recovered, 1);
+    await commit(); checks++;
+
     // Concurrent ownership transfers compare versions after acquiring the shared tenant lock.
     const contender = await db.pool.connect();
     try {
@@ -199,25 +233,35 @@ async function main() {
     assert.equal((await query("SELECT count(*)::integer AS n FROM memberships WHERE organization_id=$1 AND role='OWNER' AND status='active'",[uid(101)])).rows[0].n,1); checks++;
 
     // A request with a pre-revocation snapshot must abort, then reauthorize on retry.
-    const stale = await db.pool.connect();
-    try {
-      await begin(stale);
-      assert.equal((await stale.query('SELECT status FROM memberships WHERE id=$1',[uid(204)])).rows[0].status,'active');
-      await begin();
-      await query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[uid(102)]);
-      await query("UPDATE memberships SET status='revoked',version=version+1 WHERE id=$1",[uid(204)]);
-      await query('UPDATE organizations SET version=version+1 WHERE id=$1',[uid(102)]);
-      const staleLock = stale.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[uid(102)]).then(() => 'unexpected').catch(e => e.code);
-      await commit();
-      assert.equal(await staleLock,'40001'); await stale.query('ROLLBACK'); checks++;
-    } finally { stale.release(); }
+    for (const status of ['suspended', 'revoked']) {
+      const stale = await db.pool.connect();
+      try {
+        await begin(stale);
+        assert.equal((await stale.query('SELECT status FROM memberships WHERE id=$1',[uid(204)])).rows[0].status,'active');
+        await begin();
+        await query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[uid(102)]);
+        await query("UPDATE memberships SET status=$2,version=version+1 WHERE id=$1",[uid(204),status]);
+        await query('UPDATE organizations SET version=version+1 WHERE id=$1',[uid(102)]);
+        const staleLock = stale.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[uid(102)]).then(() => 'unexpected').catch(e => e.code);
+        await commit();
+        assert.equal(await staleLock,'40001'); await stale.query('ROLLBACK'); checks++;
+      } finally { stale.release(); }
+      await runtime(async () => { assert.equal((await query('SELECT * FROM organizations')).rowCount,0); checks++; },3,23,102);
+      if (status === 'suspended') {
+        await begin();
+        await query("UPDATE memberships SET status='active',version=version+1 WHERE id=$1",[uid(204)]);
+        await query('UPDATE organizations SET version=version+1 WHERE id=$1',[uid(102)]);
+        await commit();
+      }
+    }
     await runtime(async () => { assert.equal((await query('SELECT * FROM organizations')).rowCount,0); checks++; },3,23,102);
     await begin(); await query('UPDATE sessions SET revoked_at=now(),version=version+1 WHERE id=$1',[uid(21)]); await commit();
     await runtime(async () => { assert.equal((await query('SELECT * FROM organizations')).rowCount,0); checks++; });
-    console.log(`Disposable PostgreSQL checks passed: ${checks}. Destroy the authorized isolated cluster.`);
+    assert.ok(checks >= 50, 'Required assertions did not complete');
   } finally {
     try { await query('ROLLBACK'); } catch { /* fail closed; never log driver errors */ }
     admin.release(); await db.pool.end();
   }
+  console.log(`Disposable PostgreSQL checks passed: ${checks}. REQUIRED: destroy the authorized isolated cluster, including roles.`);
 }
 main().catch(() => { console.error('Disposable PostgreSQL checks failed or authorization gates rejected execution; details suppressed.'); process.exitCode = 1; });
