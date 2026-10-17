@@ -20,6 +20,8 @@
   "include": [
     "src",
     "vite.config.ts",
-    "db"
+    "db",
+    "server",
+    "netlify/functions"
   ]
 }

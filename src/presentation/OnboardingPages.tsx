@@ -30,6 +30,7 @@ import {
 } from "../infrastructure/preview-onboarding";
 import type { Invitation, Membership } from "../domain/organization";
 import { AuthForm, type AuthField } from "./AuthForm";
+import { ServerAuthenticationStatus } from "./ServerAuthenticationStatus";
 const PreviewContext = createContext({
   selectedId: "",
   select: (() => {}) as (id: string) => void,
@@ -86,6 +87,7 @@ export function PreviewOrganizationSelector() {
 }
 export const journeyRoutes = [
   "/auth/sign-in",
+  "/auth/callback",
   "/auth/create-account",
   "/auth/forgot-password",
   "/auth/reset-password",
@@ -100,6 +102,7 @@ export const journeyRoutes = [
 ];
 const titles: Record<string, string> = {
   "/auth/sign-in": "Welcome back",
+  "/auth/callback": "Authentication callback",
   "/auth/create-account": "Your next chapter starts here",
   "/auth/forgot-password": "Find your way back",
   "/auth/reset-password": "Choose a new password",
@@ -199,6 +202,7 @@ export function JourneyPage() {
               Nothing is sent or saved. Monitoring is OFF. Use invented details.
             </p>
           </div>
+          {(pathname.startsWith("/auth/") || pathname === "/onboarding/organizations") && <ServerAuthenticationStatus callback={pathname === "/auth/callback"} />}
           {pathname === "/auth/sign-in" && (
             <>
               <p>Preview the sign-in form and its invalid credentials state.</p>
