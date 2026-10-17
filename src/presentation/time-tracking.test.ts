@@ -1,0 +1,42 @@
+// @vitest-environment jsdom
+import { createElement } from 'react';
+import { afterEach, expect, it } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import { App } from './App';
+afterEach(cleanup);
+it('renders timer, creates manual time, corrects and voids it with confirmation', async () => {
+  const user = userEvent.setup(); render(createElement(MemoryRouter, { initialEntries: ['/app/time'] }, createElement(App)));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Start timer' }) as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.getByText(/live mode disabled/)).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Manual entry' }));
+  await user.type(screen.getByLabelText('Description'), 'Architecture review');
+  await user.click(screen.getByRole('button', { name: 'Save demo entry' }));
+  await screen.findByText('Architecture review');
+  await user.click(screen.getByRole('button', { name: 'Edit' }));
+  await user.type(screen.getByLabelText('Reason for correction'), 'Reviewed duration');
+  await user.type(screen.getByLabelText('Adjusted duration (whole minutes)'), '30');
+  await user.click(screen.getByRole('button', { name: 'Save demo entry' }));
+  await screen.findByText(/manually adjusted/);
+  await user.click(screen.getByRole('button', { name: 'Void' }));
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Cancel' })); expect(screen.getByText('Architecture review')).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Void' }));
+  await user.click(screen.getByRole('button', { name: 'Confirm void' }));
+  await waitFor(() => expect(screen.queryByText('Architecture review')).toBeNull());
+});
+it('keeps an active timer in its organization and explicitly confirms discard', async () => {
+  const user = userEvent.setup(); render(createElement(MemoryRouter, { initialEntries: ['/app/time'] }, createElement(App)));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Start timer' }) as HTMLButtonElement).disabled).toBe(false));
+  await user.type(screen.getByLabelText('What are you working on?'), 'Prototype');
+  await user.click(screen.getByRole('button', { name: 'Start timer' })); await screen.findByRole('button', { name: 'Stop timer' });
+  await user.selectOptions(screen.getByLabelText('Time-tracking organization'), 'preview-studio');
+  await screen.findByRole('button', { name: 'Start timer' });
+  await waitFor(() => expect((screen.getByLabelText('Time-tracking organization') as HTMLSelectElement).disabled).toBe(false));
+  await user.selectOptions(screen.getByLabelText('Time-tracking organization'), 'preview-living');
+  await screen.findByRole('button', { name: 'Stop timer' });
+  await user.click(screen.getByRole('button', { name: 'Discard' })); await user.click(screen.getByRole('button', { name: 'Confirm discard' }));
+  await screen.findByRole('button', { name: 'Start timer' });
+  await user.click(screen.getByRole('button', { name: 'Use dark theme' })); expect(screen.getByRole('button', { name: 'Use light theme' })).toBeTruthy();
+});
