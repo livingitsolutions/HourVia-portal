@@ -25,7 +25,7 @@ The production build command is provided for local environments and Netlify's ma
 
 ## Preview routes
 
-`/` and `/app` show the demo organization overview. `/about` provides the product landing page. `/app/time`, `/app/timesheets`, `/app/projects`, `/app/team`, `/app/reports`, and `/app/settings` show explicit future-module empty states. Unknown routes show a recovery page. The overview has loading and error recovery states, period selection, chart keyboard tooltips, theme switching, and a notification empty state. All controls are transient and reset when the page reloads.
+`/` and `/app` show the demo organization overview. `/about` provides the product landing page. `/app/time`, `/app/timesheets`, `/app/projects`, `/app/reports`, and `/app/settings` show explicit future-module empty states. Sprint 1 added `/app/sign-in`, `/app/create-organization`, `/app/organizations`, `/app/team`, `/app/invitations`, and `/app/roles` as labeled nonfunctional identity and organization demonstrations. Preview forms validate fields locally without signing in or creating records. Unknown routes show a recovery page. The overview has loading and error recovery states, period selection, chart keyboard tooltips, theme switching, and a notification empty state. All controls are transient and reset when the page reloads.
 
 ## Boundaries and safeguards
 
@@ -34,3 +34,9 @@ See [architecture documentation](docs/architecture.md) for tenancy, ownership, a
 Exactly one OWNER per organization is required. Users may belong to multiple organizations. Personal workspaces are unsupported. Planned modules include organizations, invitations, roles, time tracking, attendance, approvals, clients, projects, billable hours, billing cut-off periods, invoice preparation, reports, and audits. Employee payroll and payslips are excluded. Future desktop monitoring stays OFF by default and requires notice, permissions, and consent.
 
 No authentication, database connection, migrations, business API, monitoring, credentials, or GitHub Actions integration is included. No V1/V2 source is used. Delivery is handled exclusively by Netlify's managed source mechanism; no commits, branches, pull requests, or production deployments are created directly.
+
+## Sprint 1 contracts
+
+Provider-neutral identity/session contracts and an unwired server principal resolver reject malformed, expired, revoked, and unverified assertions. Organization aggregate rules cover provisioning, lifecycle, versioned ownership transfer, membership changes, and invitation lifecycle. A central deny-by-default permission matrix and server authorization evaluator require an active organization, active membership, and matching actor and resource tenants. Organization use cases and transaction/repository ports remain interfaces with no executable business API.
+
+See [security boundaries](docs/security.md) and the [future PostgreSQL/Drizzle persistence design](docs/persistence-design.md). No provider or database is activated. Unit tests include ownership, version conflicts, cross-tenant denial, session validation, invitation rules, monitoring restrictions, the role matrix, and preview route rendering. Real database concurrency, RLS, and provider integration checks remain prerequisites for production activation.
