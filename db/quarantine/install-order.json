@@ -1,0 +1,19 @@
+{
+  "scope": "fresh-authorized-disposable-only",
+  "automaticExecution": false,
+  "begin": "BEGIN ISOLATION LEVEL SERIALIZABLE",
+  "searchPath": "SET LOCAL search_path = public",
+  "onError": "ROLLBACK",
+  "commit": "COMMIT",
+  "steps": [
+    { "id": "roles", "path": "000_roles.sql", "role": "NONE", "dependsOn": [] },
+    { "id": "foundation", "path": "generated/20261017014340_create_identity_tenant_foundation/migration.sql", "role": "hourvia_migration", "dependsOn": ["roles"] },
+    { "id": "invariants", "path": "002_invariants_security.sql", "role": "hourvia_migration", "dependsOn": ["foundation"] },
+    { "id": "command-metadata", "path": "generated/20261017052144_add_command_delivery_metadata/migration.sql", "role": "hourvia_migration", "dependsOn": ["invariants"] },
+    { "id": "commands", "path": "003_restricted_commands.sql", "role": "NONE", "dependsOn": ["command-metadata"] }
+  ],
+  "sqlOverlays": [
+    { "path": "002_invariants_security.sql", "purpose": "RLS, triggers, definer helpers and ACLs not represented by the structural snapshot" },
+    { "path": "003_restricted_commands.sql", "purpose": "Command ownership, RLS/ACLs and idempotency_actor_tenant DEFERRABLE INITIALLY DEFERRED; installed Drizzle FK API cannot express deferral" }
+  ]
+}

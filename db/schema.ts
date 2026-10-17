@@ -44,13 +44,29 @@ export const auditEvents = pgTable('audit_events', {
   id: id(), organizationId: uuid('organization_id').notNull().references(() => organizations.id), actorMembershipId: uuid('actor_membership_id').notNull(),
   action: text('action').notNull(), targetId: uuid('target_id').notNull(), correlationId: uuid('correlation_id').notNull(),
   aggregateVersion: integer('aggregate_version').notNull(), occurredAt: time('occurred_at').notNull().defaultNow(),
-}, t => [unique('audit_tenant_id').on(t.organizationId, t.id), foreignKey({ name: 'audit_actor_tenant', columns: [t.organizationId, t.actorMembershipId], foreignColumns: [memberships.organizationId, memberships.id] }), check('audit_version', sql`${t.aggregateVersion} >= 0`), check('audit_action', sql`length(${t.action}) between 1 and 100`)]);
+}, t => [unique('audit_tenant_id').on(t.organizationId, t.id), uniqueIndex('audit_command_correlation').on(t.organizationId, t.correlationId), foreignKey({ name: 'audit_actor_tenant', columns: [t.organizationId, t.actorMembershipId], foreignColumns: [memberships.organizationId, memberships.id] }), check('audit_version', sql`${t.aggregateVersion} >= 0`), check('audit_action', sql`length(${t.action}) between 1 and 100`)]);
 export const idempotencyRecords = pgTable('idempotency_records', {
   id: id(), actorId: uuid('actor_id').notNull().references(() => users.id), organizationId: uuid('organization_id').references(() => organizations.id),
   scope: text('scope').notNull(), operation: text('operation').notNull(), key: text('key').notNull(), inputDigest: text('input_digest').notNull(),
   state: text('state').notNull().default('pending'), outcome: jsonb('outcome'), ...lifecycle(),
 }, t => [unique('idempotency_claim').on(t.actorId, t.scope, t.operation, t.key),
+  // Installed beta.22 has no FK deferrability builder. The explicit SQL overlay in
+  // 003 sets DEFERRABLE INITIALLY DEFERRED; do not infer this from Drizzle metadata.
   foreignKey({ name: 'idempotency_actor_tenant', columns: [t.organizationId, t.actorId], foreignColumns: [memberships.organizationId, memberships.userId] }),
   check('idempotency_scope', sql`(${t.organizationId} is null and ${t.scope} = 'creator' and ${t.operation} = 'provision') or (${t.organizationId} is not null and ${t.scope} = ${t.organizationId}::text and ${t.operation} in ('transfer','membership','invite','accept'))`),
   check('idempotency_key', sql`${t.key} ~ '^[A-Za-z0-9_-]{16,128}$'`), check('idempotency_digest', sql`${t.inputDigest} ~ '^[0-9a-f]{64}$'`),
   check('idempotency_outcome', sql`(${t.state} = 'pending' and ${t.outcome} is null) or (${t.state} = 'completed' and ${t.outcome} is not null and jsonb_typeof(${t.outcome}) = 'object')`), check('idempotency_version', sql`${t.version} >= 0`)]);
+
+/** Offline queue metadata only; no worker, provider or credential exchange. */
+export const invitationDeliveries = pgTable('invitation_deliveries', {
+  id: id(), organizationId: uuid('organization_id').notNull(), invitationId: uuid('invitation_id').notNull(),
+  deliveryKey: uuid('delivery_key').notNull(), state: text('state').notNull().default('queued'),
+  attempts: integer('attempts').notNull().default(0), nextAttemptAt: time('next_attempt_at').notNull().default(sql`transaction_timestamp()`),
+  leaseUntil: time('lease_until'), providerReference: text('provider_reference'), lastErrorCode: text('last_error_code'),
+  version: integer('version').notNull().default(0),
+}, t => [unique('delivery_key').on(t.deliveryKey), unique('delivery_invitation').on(t.organizationId, t.invitationId),
+  foreignKey({ name: 'delivery_invitation_tenant', columns: [t.organizationId, t.invitationId], foreignColumns: [invitations.organizationId, invitations.id] }),
+  check('delivery_state', sql`${t.state} in ('queued','leased','delivered','failed','cancelled')`),
+  check('delivery_attempts', sql`${t.attempts} >= 0 and ${t.attempts} <= 10`),
+  check('delivery_error', sql`${t.lastErrorCode} is null or ${t.lastErrorCode} in ('unavailable','rate_limited','rejected')`),
+  check('delivery_version', sql`${t.version} >= 0`)]);

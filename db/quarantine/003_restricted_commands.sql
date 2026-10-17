@@ -1,16 +1,21 @@
 -- QUARANTINED DESIGN CANDIDATE; never an active migration. NOT EXECUTED.
--- Review/apply only after 000, generated schema and 002 on an authorized disposable target.
+-- Review/apply only in install-order.json order on an authorized disposable target.
 -- Administrator-only installation. Never grant command-owner membership to runtime logins.
-BEGIN;
-RESET ROLE;
+-- Transaction belongs to the caller: no nested BEGIN or premature COMMIT.
+SET LOCAL ROLE NONE;
 CREATE ROLE hourvia_command NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 GRANT USAGE ON SCHEMA public TO hourvia_command;
 GRANT SELECT ON public.global_users, public.sessions, public.provider_identities TO hourvia_command;
+-- PostgreSQL locking SELECT needs UPDATE on at least one column, even FOR SHARE.
+-- Identity/version guards and WITH CHECK(false) prohibit using this for actual updates.
+GRANT UPDATE (id) ON public.global_users, public.sessions TO hourvia_command;
 GRANT SELECT, INSERT, UPDATE ON public.organizations, public.memberships, public.invitations, public.idempotency_records TO hourvia_command;
 GRANT INSERT ON public.audit_events TO hourvia_command;
 GRANT EXECUTE ON FUNCTION public.hv_actor() TO hourvia_command;
 CREATE POLICY command_users ON public.global_users FOR SELECT TO hourvia_command USING (true);
 CREATE POLICY command_sessions ON public.sessions FOR SELECT TO hourvia_command USING (true);
+CREATE POLICY command_users_lock ON public.global_users FOR UPDATE TO hourvia_command USING (true) WITH CHECK (false);
+CREATE POLICY command_sessions_lock ON public.sessions FOR UPDATE TO hourvia_command USING (true) WITH CHECK (false);
 CREATE POLICY command_identities ON public.provider_identities FOR SELECT TO hourvia_command USING (true);
 CREATE POLICY command_organizations ON public.organizations TO hourvia_command USING (true) WITH CHECK (true);
 CREATE POLICY command_memberships ON public.memberships TO hourvia_command USING (true) WITH CHECK (true);
@@ -18,25 +23,8 @@ CREATE POLICY command_invitations ON public.invitations TO hourvia_command USING
 CREATE POLICY command_claims ON public.idempotency_records TO hourvia_command USING (true) WITH CHECK (true);
 CREATE POLICY command_audit ON public.audit_events FOR INSERT TO hourvia_command WITH CHECK (true);
 
-CREATE UNIQUE INDEX audit_command_correlation ON public.audit_events(organization_id,correlation_id);
-
--- Business state stays in invitations. This queue contains no raw or encrypted token.
--- Future delivery must use a reviewed secure credential exchange, not reconstruct a token from its digest.
-CREATE TABLE public.invitation_deliveries (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id uuid NOT NULL,
-  invitation_id uuid NOT NULL,
-  delivery_key uuid NOT NULL UNIQUE,
-  state text NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','leased','delivered','failed','cancelled')),
-  attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 10),
-  next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-  lease_until timestamptz,
-  provider_reference text,
-  last_error_code text CHECK (last_error_code IS NULL OR last_error_code IN ('unavailable','rate_limited','rejected')),
-  version integer NOT NULL DEFAULT 0 CHECK (version >= 0),
-  UNIQUE (organization_id, invitation_id),
-  FOREIGN KEY (organization_id, invitation_id) REFERENCES public.invitations(organization_id,id)
-);
+-- Delivery table and audit index come from the generated forward metadata delta.
+-- Business state stays in invitations; no token/body belongs in this queue.
 ALTER TABLE public.invitation_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.invitation_deliveries FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON public.invitation_deliveries FROM PUBLIC, hourvia_runtime;
@@ -219,4 +207,4 @@ GRANT EXECUTE ON FUNCTION public.hv_receipt(text,text,text) TO hourvia_runtime;
 -- Owner can execute only reviewed bodies and cannot replace them.
 REVOKE CREATE ON SCHEMA public FROM hourvia_command;
 
-COMMIT; -- Installation candidate only, never executed by application startup.
+-- Caller commits only after every installation phase succeeds; otherwise ROLLBACK.

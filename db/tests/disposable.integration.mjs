@@ -5,7 +5,7 @@
  * Applies quarantined candidates ONLY after all gates pass. No default Netlify connection fallback.
  */
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { authorizeDisposable } from './disposable-gate.mjs';
 
 async function main() {
@@ -56,11 +56,13 @@ async function main() {
     assert.equal((await query("SELECT rolsuper FROM pg_roles WHERE rolname=session_user")).rows[0].rolsuper, true);
     assert.equal((await query("SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public'")).rowCount, 0);
     // No schema/role cleanup: destroy the entire isolated cluster after review.
-    await query('BEGIN');
+    await query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await query('SET LOCAL search_path = public');
     await query(await readFile(new URL('../quarantine/000_roles.sql', import.meta.url), 'utf8'));
-    const directories = await readdir(new URL('../quarantine/generated/', import.meta.url));
-    assert.equal(directories.length, 1);
-    await query(await readFile(new URL(`../quarantine/generated/${directories[0]}/migration.sql`, import.meta.url), 'utf8'));
+    // Legacy foundation-only harness: never infer scope from directory inventory.
+    // Full restricted-command verification requires a separately reviewed harness.
+    await query('SET LOCAL ROLE hourvia_migration');
+    await query(await readFile(new URL('../quarantine/generated/20261017014340_create_identity_tenant_foundation/migration.sql', import.meta.url), 'utf8'));
     await query(await readFile(new URL('../quarantine/002_invariants_security.sql', import.meta.url), 'utf8'));
     await commit();
 

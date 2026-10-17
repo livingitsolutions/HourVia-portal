@@ -77,6 +77,27 @@ describe('disabled native persistence candidates (simulated SQL replies)', () =>
     expect(f.calls.filter(c => c.sql.includes('hv_command'))).toHaveLength(2);
     // The fake returns a stored result; actual deduplication is a live SQL acceptance obligation.
   });
+  it.each<Command>([
+    { action: 'transfer', payload: { targetUserId: correlation } },
+    { action: 'accept', payload: { invitationId: correlation, credentialDigest: 'a'.repeat(64), invitationVersion: 0 } },
+  ])('preserves rollback, local context and uncertain COMMIT for $action (simulated)', async command => {
+    for (const options of [{ reject: true },{ audit: false },{ tag: 'lost' }]) {
+      const f = fixture(options);
+      const outcome = await f.repo.execute(command,1,'request_compatibility_001',correlation);
+      expect(outcome.status).toBe('tag' in options ? 'commit_unknown' : 'unavailable');
+      expect(f.connects()).toBe(1);
+      const contextQuery = f.calls.find(c => c.sql.startsWith("SELECT set_config('hourvia.actor_id'"));
+      expect(contextQuery?.parameters).toEqual([context.actorId,context.sessionId,context.organizationId]);
+      expect(f.calls.find(c => c.sql.includes('hv_command'))?.parameters?.slice(0,3)).toEqual([command.action,context.organizationId,1]);
+      if ('tag' in options) {
+        expect(f.releases).toEqual([true]);
+        expect(f.calls.some(c => c.sql === 'ROLLBACK')).toBe(false);
+      } else {
+        expect(f.calls.some(c => c.sql === 'ROLLBACK')).toBe(true);
+        expect(f.calls.some(c => c.sql === 'COMMIT')).toBe(false);
+      }
+    }
+  });
 });
 describe('quarantined SQL structural checks (not PostgreSQL execution)', () => {
   it('retains direct-write denial, closed execution grants, owner isolation and fixed search_path', async () => {
@@ -93,7 +114,9 @@ describe('quarantined SQL structural checks (not PostgreSQL execution)', () => {
     const sql = await readFile('db/quarantine/003_restricted_commands.sql','utf8');
     expect(sql).toContain('WHERE id = tenant FOR UPDATE'); expect(sql).toContain('owner_count <> 1');
     expect(sql.indexOf("SET role = 'ADMIN'")).toBeLessThan(sql.indexOf("SET role = 'OWNER'"));
-    expect(sql).toContain('UNIQUE (organization_id, invitation_id)'); expect(sql).toContain('delivery_key uuid NOT NULL UNIQUE');
+    const metadata = await readFile('db/quarantine/generated/20261017052144_add_command_delivery_metadata/migration.sql','utf8');
+    expect(metadata).toContain('UNIQUE("organization_id","invitation_id")');
+    expect(metadata).toContain('"delivery_key" uuid NOT NULL CONSTRAINT "delivery_key" UNIQUE');
     expect(sql).toContain('DEFERRABLE INITIALLY DEFERRED'); expect(sql).toContain('INSERT INTO public.audit_events');
     expect(sql).toContain("state = 'completed', outcome = result"); expect(sql).not.toContain('EXCEPTION WHEN');
     expect(sql).toContain('m.user_id = actor'); expect(sql).toContain('a.aggregate_version');

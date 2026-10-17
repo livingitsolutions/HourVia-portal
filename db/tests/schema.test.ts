@@ -1,12 +1,12 @@
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import * as schema from '../schema';
-const generated = 'db/quarantine/generated/' + readdirSync('db/quarantine/generated')[0];
+const generated = 'db/quarantine/generated/20261017014340_create_identity_tenant_foundation';
 const ddl = readFileSync(generated + '/migration.sql', 'utf8');
 const guards = readFileSync('db/quarantine/002_invariants_security.sql', 'utf8');
-it('defines eight UUID-based tables with timezone-aware timestamps', () => {
-  expect(Object.keys(schema)).toHaveLength(8);
+it('defines nine offline UUID-based tables with timezone-aware timestamps', () => {
+  expect(Object.keys(schema)).toHaveLength(9);
   for (const table of Object.values(schema)) {
     const config = getTableConfig(table);
     expect(config.columns.find(c => c.name === 'id')?.getSQLType()).toBe('uuid');
