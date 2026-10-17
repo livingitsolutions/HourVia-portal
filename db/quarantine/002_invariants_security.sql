@@ -1,7 +1,8 @@
--- QUARANTINED CANDIDATE. Execute after 000_roles and generated schema, as hourvia_migration.
+-- QUARANTINED CANDIDATE. Caller-owned transaction; follow install-order.json.
 -- NO runtime mutation grants: command-specific audited routines remain an activation gate.
+SET LOCAL ROLE hourvia_migration;
 CREATE FUNCTION public.hv_lock_membership() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
   IF current_setting('transaction_isolation') <> 'serializable' THEN
     RAISE EXCEPTION 'serializable mutation required' USING ERRCODE = '25001';
@@ -20,7 +21,7 @@ CREATE TRIGGER membership_lock BEFORE INSERT OR UPDATE OR DELETE ON public.membe
 FOR EACH ROW EXECUTE FUNCTION public.hv_lock_membership();
 
 CREATE FUNCTION public.hv_owner_count() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE tenant uuid; lifecycle text; owners integer;
 BEGIN
   IF TG_TABLE_NAME = 'organizations' THEN
@@ -41,7 +42,7 @@ CREATE CONSTRAINT TRIGGER membership_owner_count AFTER INSERT OR UPDATE OR DELET
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.hv_owner_count();
 
 CREATE FUNCTION public.hv_version_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
   IF current_setting('transaction_isolation') <> 'serializable' THEN
     RAISE EXCEPTION 'serializable mutation required' USING ERRCODE = '25001';
@@ -61,7 +62,7 @@ DO $$ DECLARE tab text; BEGIN
 END $$;
 
 CREATE FUNCTION public.hv_lifecycle_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW.state <> 'pending' THEN
@@ -114,7 +115,7 @@ CREATE TRIGGER invitation_initial_state BEFORE INSERT ON public.invitations
 FOR EACH ROW EXECUTE FUNCTION public.hv_lifecycle_guard();
 
 CREATE FUNCTION public.hv_completed_claim() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM public.idempotency_records WHERE id = NEW.id AND state <> 'completed') THEN
     RAISE EXCEPTION 'incomplete idempotency claim' USING ERRCODE = '23514';
@@ -123,7 +124,7 @@ BEGIN
 END $$;
 CREATE CONSTRAINT TRIGGER completed_claim AFTER INSERT OR UPDATE ON public.idempotency_records
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.hv_completed_claim();
-CREATE FUNCTION public.hv_append_only() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+CREATE FUNCTION public.hv_append_only() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN RAISE EXCEPTION 'append-only record' USING ERRCODE = '42501'; END $$;
 CREATE TRIGGER audit_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON public.audit_events
 FOR EACH STATEMENT EXECUTE FUNCTION public.hv_append_only();
@@ -133,14 +134,14 @@ FOR EACH STATEMENT EXECUTE FUNCTION public.hv_append_only();
 -- SECURITY DEFINER helpers use a dedicated trusted owner, fixed search_path, no dynamic SQL.
 -- They break recursive membership RLS through an explicit owner policy, not BYPASSRLS.
 CREATE FUNCTION public.hv_actor() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public AS $$
+SET search_path = pg_catalog AS $$
   SELECT u.id FROM public.global_users u JOIN public.sessions s ON s.user_id = u.id
   WHERE u.id = nullif(current_setting('hourvia.actor_id', true), '')::uuid
     AND s.id = nullif(current_setting('hourvia.session_id', true), '')::uuid
     AND u.status = 'active' AND s.revoked_at IS NULL AND s.expires_at > statement_timestamp()
 $$;
 CREATE FUNCTION public.hv_tenant_role(tenant uuid) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public AS $$
+SET search_path = pg_catalog AS $$
   SELECT m.role FROM public.memberships m JOIN public.organizations o ON o.id = m.organization_id
   WHERE m.organization_id = tenant AND tenant = nullif(current_setting('hourvia.organization_id', true), '')::uuid
     AND m.user_id = public.hv_actor() AND m.status = 'active' AND o.status = 'active'
@@ -165,4 +166,4 @@ CREATE POLICY idempotency_self ON public.idempotency_records FOR SELECT TO hourv
 GRANT SELECT ON public.global_users, public.sessions, public.organizations, public.memberships, public.invitations, public.audit_events, public.idempotency_records TO hourvia_runtime;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, hourvia_runtime;
 GRANT EXECUTE ON FUNCTION public.hv_actor(), public.hv_tenant_role(uuid) TO hourvia_runtime;
-RESET ROLE;
+SET LOCAL ROLE NONE;

@@ -8,7 +8,7 @@ END $$;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO hourvia_migration;
 GRANT USAGE ON SCHEMA public TO hourvia_runtime;
-SET ROLE hourvia_migration;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
--- Run generated schema next on this same administrator connection with SET ROLE retained.
+ALTER DEFAULT PRIVILEGES FOR ROLE hourvia_migration IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE hourvia_migration IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+-- Caller owns the serializable installation transaction. No session role leaks.
+-- Follow install-order.json; each generated phase explicitly uses SET LOCAL ROLE.
