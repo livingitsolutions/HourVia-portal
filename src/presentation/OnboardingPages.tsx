@@ -24,10 +24,11 @@ import {
   type OrganizationDraft,
 } from "../application/onboarding";
 import {
+  previewOrganizationWorkflows,
   previewInvitation,
   previewOrganizations,
 } from "../infrastructure/preview-onboarding";
-import type { Invitation } from "../domain/organization";
+import type { Invitation, Membership } from "../domain/organization";
 import { AuthForm, type AuthField } from "./AuthForm";
 const PreviewContext = createContext({
   selectedId: "",
@@ -40,16 +41,22 @@ export function OnboardingPreviewProvider({
   children: ReactNode;
 }) {
   const [selectedId, setSelectedId] = useState("");
-  const clear = useCallback(() => setSelectedId(""), []);
+  const selectionVersion = useRef(0);
+  const clear = useCallback(() => {
+    selectionVersion.current += 1;
+    setSelectedId("");
+  }, []);
   return (
     <PreviewContext.Provider
       value={{
         selectedId,
-        select: (id) =>
-          setSelectedId(
-            switchPreviewTenant(previewOrganizations, id).selected?.organization
-              .id ?? "",
-          ),
+        select: (id) => {
+          const version = ++selectionVersion.current;
+          setSelectedId("");
+          void previewOrganizationWorkflows.selectOrganization({ organizationId: id }).then(result => {
+            if (selectionVersion.current === version) setSelectedId(result.ok ? result.value.organizationId : "");
+          });
+        },
         clear,
       }}
     >
@@ -532,7 +539,11 @@ export function OrganizationWizard() {
               : "Completion preview. Your organization has not been created. Nothing was saved."}
           </p>
           {step === 2 ? (
-            <button className="primary-button" onClick={() => setStep(3)}>
+            <button className="primary-button" onClick={async () => {
+              const result = await previewOrganizationWorkflows.createOrganization({ name: draft.name, idempotencyKey: "preview-review" });
+              if (result.ok) { setError(""); setStep(3); }
+              else setError("Simulation unavailable. Review your organization name.");
+            }}>
               Preview completion
             </button>
           ) : (
@@ -602,6 +613,35 @@ export function OrganizationSelection() {
     </>
   );
 }
+function MemberListingPreview({ organizationId }: { organizationId: string }) {
+  const [members, setMembers] = useState<readonly Membership[]>([]);
+  const [state, setState] = useState("loading");
+  const [scenario, setScenario] = useState("sample");
+  useEffect(() => {
+    let active = true;
+    previewOrganizationWorkflows.listMembers({ organizationId }).then(result => {
+      if (!active) return;
+      setMembers(result.ok ? result.value : []);
+      setState(result.ok ? "ready" : "error");
+    });
+    return () => { active = false; };
+  }, [organizationId]);
+  return <section aria-label="Member listing preview">
+    <h3>Organization members · Simulated</h3>
+    <label>Member listing state
+      <select value={scenario} onChange={e => setScenario(e.target.value)}>
+        <option value="sample">Sample members</option>
+        <option value="empty">Empty preview</option>
+        <option value="error">Unavailable preview</option>
+      </select>
+    </label>
+    {scenario === "error" || state === "error" ? <p role="alert">Member preview unavailable. Try another organization.</p>
+      : scenario === "empty" ? <p>No sample members to display.</p>
+      : state === "loading" ? <p>Loading sample members…</p>
+      : <ul className="membership-list">{members.map(m => <li key={m.userId}><strong>{m.userId}</strong><span>{m.role} · {m.status} · Public sample</span></li>)}</ul>}
+    <p>No membership or access was granted. Changes require server authorization.</p>
+  </section>;
+}
 export function OrganizationPreview() {
   const { selectedId, clear } = useContext(PreviewContext);
   const selected = switchPreviewTenant(
@@ -619,6 +659,7 @@ export function OrganizationPreview() {
             Organization dashboard preview. No projects, timesheets or billing
             records are loaded.
           </p>
+          <MemberListingPreview key={selected.organization.id} organizationId={selected.organization.id} />
           <ul className="permission-list">
             {visibleActions(selected.membership.role).map((a) => (
               <li key={a.label}>

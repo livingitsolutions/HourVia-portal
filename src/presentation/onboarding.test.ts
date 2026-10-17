@@ -178,3 +178,23 @@ describe("Sprint 3A rendered interactions", () => {
     );
   });
 });
+
+describe("Sprint 3B member listing preview", () => {
+  it("loads sample members, clears them on tenant switching and presents empty and error states", async () => {
+    const user = userEvent.setup();
+    page("/onboarding/dashboard");
+    const select = screen.getByLabelText("Preview organization context");
+    await user.selectOptions(select, "preview-studio");
+    expect(await screen.findByText("preview-studio-owner")).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText("Member listing state"), "empty");
+    expect(screen.getByText("No sample members to display.")).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText("Member listing state"), "error");
+    expect(screen.getByRole("alert").textContent).toContain("unavailable");
+    await user.selectOptions(select, "preview-living");
+    expect(await screen.findByText("preview-person")).toBeTruthy();
+    expect(screen.queryByText("preview-studio-owner")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear preview context" }));
+    expect(screen.queryByLabelText("Member listing state")).toBeNull();
+  });
+});

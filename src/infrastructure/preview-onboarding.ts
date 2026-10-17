@@ -45,3 +45,34 @@ export async function previewAuthOutcome(
   await new Promise((resolve) => setTimeout(resolve, 200));
   return outcome;
 }
+
+/** Public fixture projection of application ports. No server engine, credentials,
+ * persistence, or principal resolver is composed in the browser. */
+export const previewOrganizationWorkflows: Pick<
+  import('../application/organization').OrganizationUseCases,
+  'createOrganization' | 'listMembers' | 'getOrganization' | 'getCurrentUserOrganizations' | 'selectOrganization'
+> = {
+  async createOrganization(input) {
+    const name = input.name.trim();
+    if (name.length < 2 || name.length > 120 || !input.idempotencyKey) return { ok: false, error: 'INVALID_INPUT' };
+    return { ok: true, value: { id: 'preview-unsaved', name, status: 'active' } };
+  },
+  async listMembers({ organizationId }) {
+    const choice = previewOrganizations.find(c => c.organization.id === organizationId);
+    if (!choice) return { ok: false, error: 'NOT_FOUND' };
+    // A complete fixture includes the studio owner alongside the viewer.
+    const owner = { userId: 'preview-studio-owner', organizationId, role: 'OWNER' as const, status: 'active' as const };
+    return { ok: true, value: choice.membership.role === 'OWNER' ? [choice.membership] : [owner, choice.membership] };
+  },
+  async getOrganization({ organizationId }) {
+    const choice = previewOrganizations.find(c => c.organization.id === organizationId);
+    return choice ? { ok: true, value: choice.organization } : { ok: false, error: 'NOT_FOUND' };
+  },
+  async getCurrentUserOrganizations() {
+    return { ok: true, value: previewOrganizations.map(c => c.organization) };
+  },
+  async selectOrganization({ organizationId }) {
+    const choice = previewOrganizations.find(c => c.organization.id === organizationId && c.membership.status === 'active');
+    return choice ? { ok: true, value: { organizationId, actorId: 'preview-person' } } : { ok: false, error: 'FORBIDDEN' };
+  },
+};
